@@ -1,17 +1,64 @@
 import {NextResponse} from "next/server";
 import puppeteer from "puppeteer";
+import {S3Client, PutObjectCommand} from '@aws-sdk/client-s3';
 
 export async function GET(request: Request) {
-    // const strPrettify = (str: string | undefined) => {
-    //     return str?.replace(/[\n\t]|მ²/g, '');
-    // }
-
     let browser;
 
     try {
+        const s3Client = new S3Client({
+            region: process.env.BUCKET_REGION!,
+            credentials: {
+                accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+                secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!
+            }
+        });
+
+        const uploadImageBufferToS3 = async (imageBuffer: Buffer, bucketName: string, fileName: string) => {
+            const params = {
+                Bucket: bucketName,
+                Key: fileName,
+                Body: imageBuffer
+            };
+
+            const command = new PutObjectCommand(params);
+
+            try {
+                await s3Client.send(command);
+                // console.log('File uploaded successfully:', response);
+                // return `https://${bucketName}.s3.amazonaws.com/${fileName}`; // Construct URL
+            } catch (err) {
+                console.error('Error uploading file:', err);
+                throw err;
+            }
+        };
+
         browser = await puppeteer.launch();
         const page = await browser.newPage();
-        await page.goto("https://www.myhome.ge/ka/pr/17081379/");
+        let counter = 0;
+        page.on('response', async response => {
+            const url = response.url();
+            if (response.request().resourceType() === 'image') {
+                const contentType = response.headers()['content-type'];
+                if (contentType && contentType.toLowerCase().includes('image/jpeg')) {
+                    response.buffer().then(buffer => {
+                        const fileName = url.split('/').pop();
+                        if (fileName && /\d{8}/.test(fileName)) {
+                            uploadImageBufferToS3(buffer, process.env.BUCKET_NAME!, fileName)
+                                .then(uploadedUrl => {
+                                    console.log('Uploaded URL:', uploadedUrl);
+                                })
+                                .catch(err => {
+                                    console.error('Error:', err);
+                                });
+
+                        }
+                    });
+                }
+            }
+        });
+
+        await page.goto("https://www.myhome.ge/ka/pr/16135388/");
 
         const title = await page.$eval('div.statement-title h1', h1 => h1.textContent?.trim());
 
